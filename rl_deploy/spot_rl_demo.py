@@ -7,8 +7,8 @@ from pathlib import Path
 import bosdyn.client.util
 import orbit.orbit_configuration
 from rl_deploy.hid.terminal_keyboard import TerminalKeyboard
-from rl_deploy.orbit.onnx_command_generator import (
-    OnnxCommandGenerator,
+from rl_deploy.orbit.phase2_onnx_command_generator import (
+    Phase2OnnxCommandGenerator,
     OnnxControllerContext,
     StateHandler,
 )
@@ -50,12 +50,12 @@ def main():
     print("Verbose option: ", options.verbose)
 
     logger = HDF5Logger(options.hdf5_log)
-    command_generator = OnnxCommandGenerator(
+    command_generator = Phase2OnnxCommandGenerator(
         context, config, policy_file, options.verbose, logger=logger
     )
     gamepad = TerminalKeyboard(context)
-    # 333 Hz state update / 6 => ~56 Hz control updates
-    timeing_policy = EventDivider(context, 6)
+    # 333 Hz state update / 7 => ~48 Hz control updates (closer to Phase 2's 50 Hz target)
+    timeing_policy = EventDivider(context, 7)
 
     if options.mock:
         spot = MockSpot()
