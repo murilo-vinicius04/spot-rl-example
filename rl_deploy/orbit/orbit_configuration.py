@@ -120,7 +120,12 @@ def load_configuration(env_config: dict) -> OrbitConfig:
         regex = re.compile(expression)
         set_matching(joint_offsets, regex, default_joint_data[expression])
 
-    action_scale = env_config["actions"]["joint_pos"]["scale"]
+    if "joint_pos" in env_config["actions"]:
+        action_scale = env_config["actions"]["joint_pos"]["scale"]
+    elif "leg_joint_pos" in env_config["actions"]:
+        action_scale = env_config["actions"]["leg_joint_pos"]["scale"]
+    else:
+        raise KeyError("Could not find 'joint_pos' or 'leg_joint_pos' in actions configuration.")
     standing_height = env_config["scene"]["robot"]["init_state"]["pos"][2]
 
     # Override the arm with default values for kp, kd

@@ -15,6 +15,63 @@ uv run rl_deploy/spot_rl_demo.py  10.0.0.3 --mock
 uv run rl_deploy/spot_rl_isaac.py
 ```
 
+# Deploying the locomanipulation policies (`models/`)
+
+This repo ships three whole-body (12 legs + 7 arm = **19-DoF**) policies trained in
+`spot-locomanipulation`. All three share the **same observation/action layout**, so they are
+drop-in for the Phase-2 deploy path (`Phase2OnnxCommandGenerator`):
+
+| dir | source checkpoint | what it is |
+|---|---|---|
+| `models/phase2`    | `spot_locomanipulation/2026-05-31` | original whole-body Phase-2 baseline |
+| `models/v9_serial` | `model_1595` (`spot_walk_serial_continuous/2026-06-11`) | **v9** serial-correction base (skill drive + balance corrector). Hardware-ready: ~0.2% falls, self-collision ON, 2.8% foot-crossing |
+| `models/wrench`    | `model_wrench_v1_GOOD` (`spot_walk_serial_wrench/2026-06-16`) | **v9 + wrench-robustness.** Fine-tuned under injected payload/manip wrenches. Holds ~v9 tracking *under* a 60 N base pull (the disturbance the teleop arm imposes) |
+
+**ONNX I/O for all three:** input `obs [1, 69]`, output `actions [1, 19]`.
+
+> The `models/wrench` ONNX was exported with the **wrench head pruned** (`play.py --lesion wrench`).
+> A lesion study showed the privileged-wrench head is inert — the balance corrector already braces
+> from proprioception — so the deployed graph is a clean 69→19 with **no privileged input**, identical
+> in shape to v9. See `CLAUDE.md`.
+
+Each `models/<name>/` dir is self-contained (`policy.onnx` + `env.yaml` + `agent.yaml`), so point
+`-policy_file_path` straight at it:
+
+```bash
+export BOSDYN_CLIENT_USERNAME=admin BOSDYN_CLIENT_PASSWORD=spotadmin2017
+
+# 1) ALWAYS mock + tethered first — confirm WASD maps and dt_* are healthy before powering legs
+uv run rl_deploy/spot_rl_demo.py 10.0.0.3 --mock -policy_file_path models/wrench
+
+# 2) On the real robot (recommended policy = wrench; use v9_serial for the no-load baseline)
+uv run rl_deploy/spot_rl_demo.py 10.0.0.3 -policy_file_path models/wrench
+```
+
+**Keyboard teleop** (terminal, no Enter needed): `w/s` fwd/back, `a/d` strafe, `q/e` yaw,
+`space` = stop, `ctrl+c` = quit. Velocities are **incremental** (each press adds ±0.5, clipped to
+±1.0) and feed the policy's 3-dim `velocity_commands`. The arm joints are driven by the policy; the
+keyboard only commands base velocity.
+
+**Before trusting a run** (see README's *Timing Diagnostics*): keep `dt_total_step ≈ 0.02 s` and
+`dt_onnx_compute < 5 ms` at the ~48–50 Hz the `EventDivider(7)` produces.
+
+**Caveats for `models/wrench`:** it braces by going *narrow + stiff + tall* (foot separation ~0.27 m
+vs ~0.47 nominal) — a known reward-shaping wart, not a physics bug; watch it on real terrain. Its
+robustness is validated mainly to ~60 N pull (trained 0–130 N, but only clean + 60 N are
+deterministically eval'd).
+
+## Re-exporting a policy to ONNX
+
+Run inside the Isaac Sim container (see `CLAUDE.md` for the `TERM=xterm` gotcha):
+```bash
+docker exec -e TERM=xterm -w /workspace/spot-locomanipulation spot-teleop-isaac-sim-1 \
+  bash -c 'export TERM=xterm; ./IsaacLab/isaaclab.sh -p scripts/rsl_rl/play.py \
+    --task Isaac-Locomanipulation-Flat-Spot-WalkSerialWrench-Play-v0 --num_envs 1 --headless \
+    --lesion wrench \
+    --checkpoint logs/rsl_rl/spot_walk_serial_wrench/<run>/model_wrench_v1_GOOD.pt'
+# writes <run>/exported/policy.onnx  (drop `--lesion wrench` for non-wrench actors like v9)
+```
+
 
 ## Plot Acquisition Frequencies
 ```bash

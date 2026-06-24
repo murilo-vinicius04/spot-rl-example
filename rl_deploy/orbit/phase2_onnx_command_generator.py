@@ -294,7 +294,8 @@ class Phase2OnnxCommandGenerator:
         reorder them back to Spot robot order before sending to the robot.
         """
         # Execute model from ONNX file (outputs 19 dimensions)
-        output = self._inference_session.run(None, input_dict)[0][0]
+        onnx_input = {"obs": input_dict["observations"]}
+        output = self._inference_session.run(None, onnx_input)[0][0]
 
         # Only use first 12 dimensions for legs, apply 0.2 scaling factor
         # Last 7 dimensions (arm) are ignored
@@ -336,9 +337,9 @@ class Phase2OnnxCommandGenerator:
             print("[INFO] cmd", self._context.velocity_cmd)
 
         # Extract base state
-        base_lin_vel = ob.get_base_linear_velocity(state)[0]  # [3]
-        base_ang_vel = ob.get_base_angular_velocity(state)[0]  # [3]
-        gravity = ob.get_projected_gravity(state)[0]  # [3]
+        base_lin_vel = ob.get_base_linear_velocity(state)  # [3]
+        base_ang_vel = ob.get_base_angular_velocity(state)  # [3]
+        gravity = ob.get_projected_gravity(state)  # [3]
         cmd = np.array(self._context.velocity_cmd)  # [3]
 
         # Extract joint states
