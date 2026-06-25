@@ -29,10 +29,14 @@ drop-in for the Phase-2 deploy path (`Phase2OnnxCommandGenerator`):
 
 **ONNX I/O for all three:** input `obs [1, 69]`, output `actions [1, 19]`.
 
-> The `models/wrench` ONNX was exported with the **wrench head pruned** (`play.py --lesion wrench`).
-> A lesion study showed the privileged-wrench head is inert — the balance corrector already braces
-> from proprioception — so the deployed graph is a clean 69→19 with **no privileged input**, identical
-> in shape to v9. See `CLAUDE.md`.
+> **v9 and wrench are composite actors (skill drive + balance corrector).** Their `policy.onnx`
+> are **composite-aware** exports — they contain BOTH nets (7 Gemm + an Add; verified the ONNX
+> matches the real torch `forward()` to ~1e-5). Do **not** regenerate them with the stock rsl_rl
+> exporter (`play.py`): it only saves the skill-drive `mlp` and silently drops the corrector,
+> producing a walk-only, much less stable policy (4-Gemm, no Add). Re-export with
+> `spot-locomanipulation/scripts/rsl_rl/export_composite_onnx.py`. The `wrench` model's inert
+> wrench head is dropped at export, so there's no privileged input. (`phase2` is a plain MLP — its
+> stock export is complete.)
 
 Each `models/<name>/` dir is self-contained (`policy.onnx` + `env.yaml` + `agent.yaml`), so point
 `-policy_file_path` straight at it:
@@ -60,16 +64,16 @@ vs ~0.47 nominal) — a known reward-shaping wart, not a physics bug; watch it o
 robustness is validated mainly to ~60 N pull (trained 0–130 N, but only clean + 60 N are
 deterministically eval'd).
 
-## Re-exporting a policy to ONNX
+## Re-exporting the policies to ONNX
 
-Run inside the Isaac Sim container (see `CLAUDE.md` for the `TERM=xterm` gotcha):
+v9/wrench are composite actors — use the **composite-aware** exporter (not stock `play.py`, which
+drops the balance corrector). Run inside the Isaac Sim container (see `CLAUDE.md` for the
+`TERM=xterm` gotcha):
 ```bash
 docker exec -e TERM=xterm -w /workspace/spot-locomanipulation spot-teleop-isaac-sim-1 \
-  bash -c 'export TERM=xterm; ./IsaacLab/isaaclab.sh -p scripts/rsl_rl/play.py \
-    --task Isaac-Locomanipulation-Flat-Spot-WalkSerialWrench-Play-v0 --num_envs 1 --headless \
-    --lesion wrench \
-    --checkpoint logs/rsl_rl/spot_walk_serial_wrench/<run>/model_wrench_v1_GOOD.pt'
-# writes <run>/exported/policy.onnx  (drop `--lesion wrench` for non-wrench actors like v9)
+  bash -c 'export TERM=xterm; ./IsaacLab/isaaclab.sh -p scripts/rsl_rl/export_composite_onnx.py --headless'
+# rewrites spot-locomanipulation/models/{v9,wrench}/policy.onnx (skill + corrector),
+# asserting the ONNX matches the real torch forward(). Then copy them into models/{v9_serial,wrench}/.
 ```
 
 

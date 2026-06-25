@@ -14,32 +14,32 @@ joint_vel(12) + arm_joint_pos(7) + arm_joint_vel(7) + actions(19)`. Action scale
 `use_default_offset=True`; the 19 default joint offsets are identical across phase2 / v9 / wrench
 (so one `env.yaml` is valid for all — that's why `models/*/env.yaml` are copies of the deploy config).
 
-`models/wrench` was exported with the **wrench head pruned** (`--lesion wrench`): a lesion study found
-the privileged-wrench head inert (the balance corrector braces from proprioception alone), so the
-deployed graph has **no privileged input** and is shape-identical to v9.
+## v9/wrench are COMPOSITE actors — the stock exporter is wrong
 
-## Exporting a policy to ONNX (Isaac Sim container)
+v9 and wrench are `SerialCorrectionActor`s: a **skill-drive** net (gait) + a **balance-corrector**
+net (cerebellar stabilizer); the action is the sum. The stock rsl_rl exporter (`play.py`) only saves
+`policy.actor` (== the skill-drive `mlp`) and **silently drops the corrector** → a walk-only, much
+less stable ONNX (4-Gemm, no Add). A **correct composite ONNX has 7 Gemm + 1 Add** (4 skill + 3
+corrector + residual sum) plus a Slice/Concat that rebuilds the corrector's `balance` obs (the
+69-vector minus `velocity_commands[9:12]`). `models/wrench`'s inert wrench head is dropped at export
+(no privileged input). `phase2` is a plain MLP — its stock export is complete.
 
-The exporter is `spot-locomanipulation/scripts/rsl_rl/play.py` — it loads a checkpoint, optionally
-lesions, writes `<run>/exported/policy.{onnx,pt}`, then starts a sim loop (kill it once the ONNX is
-written). The host repo is bind-mounted to `/workspace/spot-locomanipulation`, so host edits are seen
-in-container with no rebuild.
+## Exporting the composite to ONNX (Isaac Sim container)
+
+Use the composite-aware exporter, NOT `play.py`. It traces the full `forward()` (skill + corrector),
+writes `models/{v9,wrench}/policy.onnx`, and asserts the ONNX matches the real torch `forward()` to
+~1e-5. The host repo is bind-mounted to `/workspace/spot-locomanipulation` (host edits seen in-container).
 
 ```bash
 docker exec -e TERM=xterm -w /workspace/spot-locomanipulation spot-teleop-isaac-sim-1 \
-  bash -c 'export TERM=xterm; ./IsaacLab/isaaclab.sh -p scripts/rsl_rl/play.py \
-    --task Isaac-Locomanipulation-Flat-Spot-WalkSerialWrench-Play-v0 --num_envs 1 --headless \
-    --lesion wrench \
-    --checkpoint logs/rsl_rl/spot_walk_serial_wrench/<run>/model_wrench_v1_GOOD.pt'
+  bash -c 'export TERM=xterm; ./IsaacLab/isaaclab.sh -p scripts/rsl_rl/export_composite_onnx.py --headless'
+# then copy spot-locomanipulation/models/{v9,wrench}/policy.onnx into models/{v9_serial,wrench}/
 ```
 
-- **`--checkpoint` must be a path** (resolved from CWD via `retrieve_file_path`), **not a bare
-  filename** — a bare name is looked up relative to CWD, not inside the run dir, and fails with
-  `Unable to find the file`.
-- **`--lesion wrench`** drops the inert wrench head → clean 69→19 (no second input). Omit it for
-  non-wrench actors (e.g. v9), which already export to 69→19.
 - Verify after export: `onnx.load(...).graph.input` should be a single `obs [1,69]`, output
-  `actions [1,19]`.
+  `actions [1,19]`, with **7 Gemm + 1 Add** (skill + corrector). 4 Gemm / no Add = walk-only, wrong.
+- Sim-side (`.pt`) deploy of the full composite with live lesioning is
+  `spot-locomanipulation/scripts/rsl_rl/deploy_spot_walkreflex_standalone.py --serial [--wrench]`.
 
 ### `TERM=xterm` is mandatory (the gotcha)
 
