@@ -72,7 +72,11 @@ def main():
             print("start state stream")
             spot.start_state_stream(state_handler)
 
-            # input(" OK To enter loop")
+            input(
+                "\n>>> Robot is STANDING under Boston Dynamics control (no policy commands yet).\n"
+                ">>> Confirm the gantry is taking weight and the E-stop/hijack is in hand.\n"
+                ">>> Press ENTER to hand control to the POLICY, or Ctrl-C to abort: "
+            )
             print("start command stream")
             spot.start_command_stream(command_generator, timeing_policy)
             gamepad.listen()
