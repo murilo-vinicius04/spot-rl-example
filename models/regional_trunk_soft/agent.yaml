@@ -1,0 +1,114 @@
+seed: 42
+device: cuda:0
+num_steps_per_env: 24
+max_iterations: 800
+empirical_normalization: {}
+obs_groups:
+  actor:
+  - policy
+  critic:
+  - policy
+clip_actions: null
+check_for_nan: true
+save_interval: 50
+experiment_name: spot_regional_trunk_soft
+run_name: ''
+logger: tensorboard
+neptune_project: isaaclab
+wandb_project: isaaclab
+resume: true
+load_run: from_regional
+load_checkpoint: model_3098.pt
+class_name: OnPolicyRunner
+actor:
+  class_name: spot_loco.tasks.locomanipulation.config.spot.agents.regional_actor:RegionalMLPModel
+  hidden_dims:
+  - 512
+  - 256
+  - 128
+  activation: elu
+  obs_normalization: false
+  distribution_cfg:
+    class_name: GaussianDistribution
+    init_std: 1.0
+    std_type: scalar
+  regions:
+  - name: drive
+    units:
+    - 0
+    - 256
+    blocked_obs: []
+  - name: balance
+    units:
+    - 256
+    - 512
+    blocked_obs:
+    - 9
+    - 10
+    - 11
+critic:
+  class_name: MLPModel
+  hidden_dims:
+  - 512
+  - 256
+  - 128
+  activation: elu
+  obs_normalization: false
+  distribution_cfg: null
+algorithm:
+  class_name: spot_loco.tasks.locomanipulation.config.spot.agents.multi_critic_ppo:MultiCriticPPO
+  num_learning_epochs: 5
+  num_mini_batches: 4
+  learning_rate: 0.00013
+  schedule: fixed
+  gamma: 0.99
+  lam: 0.95
+  entropy_coef: 0.01
+  desired_kl: 0.01
+  max_grad_norm: 1.0
+  optimizer: adam
+  value_loss_coef: 1.0
+  use_clipped_value_loss: true
+  clip_param: 0.2
+  normalize_advantage_per_mini_batch: false
+  share_cnn_encoders: false
+  rnd_cfg: null
+  symmetry_cfg: null
+  reward_groups:
+    balance:
+    - alive
+    - base_orientation
+    - base_motion
+    - foot_slip
+    - lower_leg_contact
+    - action_smoothness
+    - joint_acc
+    - joint_vel
+    - joint_torques
+    - joint_pos
+    - leg_mirror_asymmetry
+    - foot_side_alignment
+    - standing_success
+    - moving_with_zero_cmd
+    - feet_planted_standing
+    - foot_lateral_separation
+    locomotion:
+    - gait
+    - air_time
+    - foot_clearance
+    - air_time_variance
+    - base_linear_velocity
+    - base_angular_velocity
+  module_groups:
+    balance:
+    - '*'
+    locomotion:
+    - '*'
+  region_routing:
+    balance: balance
+    locomotion: drive
+  route_alpha: 0.5
+  critic_burn_in: 15
+  ewc_coef: 0.0
+policy: {}
+store_code_state: false
