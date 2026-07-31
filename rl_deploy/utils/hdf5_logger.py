@@ -11,9 +11,16 @@ import numpy as np
 class HDF5Logger:
     """Class to buffer and save robot states and observations to an HDF5 file."""
 
-    def __init__(self, log_path: str):
+    def __init__(self, log_path: str, metadata: Dict[str, str] | None = None):
         self.log_path = log_path
         self._first_timestamp = None
+        # Run provenance, written as HDF5 root attrs by save(). Without this a day of robot
+        # logs is a pile of same-shaped arrays with no way to tell which policy, which payload
+        # configuration, or which manoeuvre produced them. See EXPERIMENTS.md.
+        self.metadata: Dict[str, str] = dict(metadata or {})
+        self.metadata.setdefault(
+            "wall_clock_start", datetime.datetime.now().astimezone().isoformat()
+        )
         self.data: Dict[str, List] = {
             "raw_base_linear_velocity": [],
             "raw_base_angular_velocity": [],
@@ -116,6 +123,17 @@ class HDF5Logger:
         # Create variable-length datatype for raw bytes arrays
         vlen_bytes_dtype = h5py.vlen_dtype(np.uint8)
         with h5py.File(self.log_path, "w") as f:
+            # Provenance first, and defensively: a metadata bug must NEVER cost the run data.
+            try:
+                self.metadata.setdefault(
+                    "wall_clock_end", datetime.datetime.now().astimezone().isoformat()
+                )
+                self.metadata.setdefault("n_steps", str(len(self.data["response_timestamp"])))
+                for k, v in self.metadata.items():
+                    f.attrs[k] = str(v)
+            except Exception as exc:  # noqa: BLE001 - never lose a robot run over metadata
+                print(f"[HDF5Logger] WARNING: failed to write metadata attrs: {exc}")
+
             for key, val in self.data.items():
                 if len(val) > 0:
                     if key == "raw_state_proto_bytes" or key == "proto_bytes":
