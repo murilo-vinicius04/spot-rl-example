@@ -19,6 +19,21 @@ def main():
     parser.add_argument(
         "--limit", type=int, default=-1, help="Max steps to replay. -1 for all."
     )
+    parser.add_argument(
+        "-policy_file_path",
+        type=str,
+        default="rl_deploy/configs",
+        help="Directory holding policy.onnx + env.yaml to replay. Defaults to the historical "
+        "hardcoded rl_deploy/configs so existing behaviour is unchanged.",
+    )
+    parser.add_argument(
+        "--phase2",
+        action="store_true",
+        help="Use Phase2OnnxCommandGenerator (single 69-dim concatenated observation) instead of "
+        "the legacy OnnxCommandGenerator (7 named tensors). REQUIRED for v9/wrench/trunk-family "
+        "policies -- they are 69->19 and running them through the legacy path silently feeds the "
+        "network a differently-shaped observation rather than raising.",
+    )
     AppLauncher.add_app_launcher_args(parser)
 
     args_cli = parser.parse_args()
@@ -33,11 +48,22 @@ def main():
     from isaaclab.envs import ManagerBasedEnv
 
     from rl_deploy.orbit import orbit_configuration
-    from rl_deploy.orbit.onnx_command_generator import (
-        OnnxCommandGenerator,
-        OnnxControllerContext,
-        StateHandler,
-    )
+
+    if args_cli.phase2:
+        # 69-dim concatenated observation path -- the one v9/wrench/trunk policies actually run on
+        # the robot via spot_rl_demo.py. Same constructor shape, and this module ships its own
+        # matching OnnxControllerContext/StateHandler.
+        from rl_deploy.orbit.phase2_onnx_command_generator import (
+            OnnxControllerContext,
+            Phase2OnnxCommandGenerator as _CommandGenerator,
+            StateHandler,
+        )
+    else:
+        from rl_deploy.orbit.onnx_command_generator import (
+            OnnxCommandGenerator as _CommandGenerator,
+            OnnxControllerContext,
+            StateHandler,
+        )
     from rl_deploy.isaaclab_spot.isaac_spot import IsaacMockSpot
     from rl_deploy.isaaclab_spot.spot_env import SpotFlatEnvCfg
     from rl_deploy.spot.constants import ORDERED_JOINT_NAMES_SPOT
@@ -61,7 +87,7 @@ def main():
     if args_cli.limit > 0:
         num_steps = min(num_steps, args_cli.limit)
 
-    export_model_dir = "rl_deploy/configs"
+    export_model_dir = args_cli.policy_file_path
     env_config = orbit_configuration.detect_config_file(export_model_dir)
     policy_file = orbit_configuration.detect_policy_file(export_model_dir)
     config = orbit_configuration.load_configuration(env_config)
@@ -74,7 +100,7 @@ def main():
 
     context = OnnxControllerContext()
     state_handler = StateHandler(context)
-    command_generator = OnnxCommandGenerator(
+    command_generator = _CommandGenerator(
         context, config, policy_file, False, logger=None
     )
 
