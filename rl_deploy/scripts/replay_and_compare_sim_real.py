@@ -108,7 +108,11 @@ def main():
     spot.start_state_stream(state_handler)
 
     obs_dict, _ = env.reset()
-    obs = obs_dict["debug"]
+    # Must be the "spot" group, not "debug": set_state() reads joint_pos / root_*_w / joint_effort /
+    # sim_time, which live in SpotObs. DebugObs only carries the *_rel and default_joint_pos terms,
+    # so "debug" raised KeyError('joint_pos') at reset and this script could never get past its
+    # first line of simulation. The loop below already uses obs_dict["spot"] correctly.
+    obs = obs_dict["spot"]
     spot.set_state(obs)
     spot.start_command_stream(command_generator)
 
@@ -122,19 +126,29 @@ def main():
     print(f"Starting replay for {num_steps} steps...")
     for i in range(num_steps):
         # Override velocity command directly to the context
-        context.velocity_cmd = vel_cmds[i].tolist()
+        # HDF5 stores preprocessed_velocity_cmd as (N, 1, 3), so vel_cmds[i] is (1, 3) and a plain
+        # .tolist() gives a NESTED [[x, y, z]]. The live deploy path sets a flat [x, y, z]; leaving
+        # it nested makes the Phase-2 obs concatenate mix 1-D and 2-D arrays and raise. Flatten.
+        context.velocity_cmd = np.asarray(vel_cmds[i]).reshape(-1).tolist()
 
         with torch.inference_mode():
             actions = spot.command_update().to(env_cfg.sim.device)
             obs_dict, _ = env.step(actions)
-            obs = obs_dict["spot"]
-            spot.set_state(obs)
+            # The two obs groups serve DIFFERENT purposes and the script previously used one for
+            # both, so half its accesses always raised:
+            #   SpotObs  = sim_time, root_{lin,ang}_vel_w, root_quat_w, joint_pos, joint_vel,
+            #              joint_effort   -> what set_state() consumes
+            #   DebugObs = base_lin_vel, base_ang_vel, projected_gravity, joint_pos_rel,
+            #              joint_vel_rel, ... -> what the comparison records
+            spot_obs = obs_dict["spot"]
+            dbg = obs_dict["debug"]
+            spot.set_state(spot_obs)
 
             # Record simulated states corresponding to the observation
-            sim_pos = obs["joint_pos_rel"][0].cpu().numpy()
-            sim_lv = obs["base_lin_vel"][0].cpu().numpy()
-            sim_av = obs["base_ang_vel"][0].cpu().numpy()
-            sim_eff = obs["joint_effort"][0].cpu().numpy()
+            sim_pos = dbg["joint_pos_rel"][0].cpu().numpy()
+            sim_lv = dbg["base_lin_vel"][0].cpu().numpy()
+            sim_av = dbg["base_ang_vel"][0].cpu().numpy()
+            sim_eff = spot_obs["joint_effort"][0].cpu().numpy()
 
             sim_positions.append(sim_pos)
             sim_lin_vel.append(sim_lv)
@@ -152,6 +166,20 @@ def main():
 
     out_dir = Path("logs")
     out_dir.mkdir(exist_ok=True, parents=True)
+
+    # Dump the raw arrays, not just the PNGs. Plots cannot be turned back into numbers, and the
+    # sim-vs-real question is quantitative (per-joint distributional gaps), so every downstream
+    # analysis would otherwise have to re-run a ~10 min Isaac session to get the data back.
+    np.savez_compressed(
+        out_dir / "replay_arrays.npz",
+        sim_positions=sim_positions, sim_lin_vel=sim_lin_vel, sim_ang_vel=sim_ang_vel,
+        sim_loads=sim_loads, sim_commanded=sim_commanded,
+        real_positions=real_positions[:num_steps], real_loads=real_loads[:num_steps],
+        real_commanded=real_commanded[:num_steps],
+        real_lin_vel=real_lin_vel[:num_steps], real_ang_vel=real_ang_vel[:num_steps],
+        vel_cmds=np.asarray(vel_cmds[:num_steps]).reshape(num_steps, -1),
+    )
+    print(f"Saved {out_dir/'replay_arrays.npz'}")
 
     # Plot Base Linear Velocity comparisons
     fig, axes = plt.subplots(3, 1, figsize=(10, 9), sharex=True)
