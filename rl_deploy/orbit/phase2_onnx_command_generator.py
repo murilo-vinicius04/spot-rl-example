@@ -293,24 +293,29 @@ class Phase2OnnxCommandGenerator:
         CRITICAL: Policy outputs leg actions in Policy order, but we need to
         reorder them back to Spot robot order before sending to the robot.
         """
-        # Execute model from ONNX file (outputs 19 dimensions)
+        # Execute model from ONNX file (outputs 19 RAW actions: skill + corrector)
         onnx_input = {"obs": input_dict["observations"]}
         output = self._inference_session.run(None, onnx_input)[0][0]
 
-        # Only use first 12 dimensions for legs, apply 0.2 scaling factor
-        # Last 7 dimensions (arm) are ignored
+        # last_action obs term = the RAW 19-d policy output, in Policy order
+        # (matches mdp.last_action in training; NOT scaled, arm NOT zeroed).
+        self._last_action_policy = np.asarray(output, dtype=np.float32).copy()
+
+        # Legs: target = default + 0.2 * action  (scale=0.2, use_default_offset=True).
+        # The 7 arm actions are not applied (arm held at carry pose) but ARE fed
+        # back into last_action above, exactly as in training.
         leg_action_policy = output[:12] * 0.2
 
-        # CRITICAL: Reorder leg actions from Policy order back to Spot robot order
+        # CRITICAL: Reorder leg deltas from Policy order back to Spot robot order
         # Policy:     [fl_hx, fr_hx, hl_hx, hr_hx, fl_hy, fr_hy, hl_hy, hr_hy, fl_kn, fr_kn, hl_kn, hr_kn]
         # Spot:      [fl_hx, fl_hy, fl_kn, fr_hx, fr_hy, fr_kn, hl_hx, hl_hy, hl_kn, hr_hx, hr_hy, hr_kn]
         leg_action_spot = reorder_policy_to_spot_leg(leg_action_policy)
+        leg_default_spot = np.asarray(self.joints_offsets_ordered_spot[:12], dtype=np.float32)
+        leg_target_spot = leg_default_spot + leg_action_spot
 
-        # Store both versions: Policy order for next observation, Spot order for robot
-        self._last_action_policy = np.concatenate([leg_action_policy, [0.0] * 7])  # Keep in Policy order
-        self._last_action_spot = np.concatenate([leg_action_spot, [0.0] * 7])   # For robot
+        self._last_action_spot = np.concatenate([leg_action_spot, [0.0] * 7])  # logging only
 
-        return leg_action_spot.tolist()
+        return leg_target_spot.tolist()
 
     def collect_inputs(
         self,
@@ -352,10 +357,19 @@ class Phase2OnnxCommandGenerator:
         arm_pos = joint_pos[self._arm_joint_indices]  # [7]
         arm_vel = joint_vel[self._arm_joint_indices]  # [7]
 
+        # Obs uses joint_pos_rel = position - default for ALL joints (training's
+        # mdp.joint_pos_rel); velocities are absolute. default = config.default_joints
+        # (the training carry pose). The arm is physically held at stow (!= carry), so
+        # its joint_pos_rel is a ~constant nonzero offset — fine: the policy trained
+        # against the arm sweeping its reachable set and is robust to arm movement.
+        default_spot = np.asarray(self.joints_offsets_ordered_spot)
+        leg_pos_rel_spot = leg_pos_spot - default_spot[:12]
+        arm_pos_rel = arm_pos - default_spot[12:19]
+
         # CRITICAL: Reorder leg data from Spot order to Phase 2 policy order
         # Real Spot: [fl_hx, fl_hy, fl_kn, fr_hx, fr_hy, fr_kn, hl_hx, hl_hy, hl_kn, hr_hx, hr_hy, hr_kn]
         # Policy:     [fl_hx, fr_hx, hl_hx, hr_hx, fl_hy, fr_hy, hl_hy, hr_hy, fl_kn, fr_kn, hl_kn, hr_kn]
-        leg_pos_policy = reorder_spot_to_policy_leg(leg_pos_spot)  # [12]
+        leg_pos_policy = reorder_spot_to_policy_leg(leg_pos_rel_spot)  # [12]
         leg_vel_policy = reorder_spot_to_policy_leg(leg_vel_spot)  # [12]
 
         # Concatenate all components into 69-dim observation
@@ -364,11 +378,11 @@ class Phase2OnnxCommandGenerator:
             base_ang_vel,           # 3
             gravity,                # 3
             cmd,                    # 3
-            leg_pos_policy,         # 12 (reordered to policy order)
-            leg_vel_policy,         # 12 (reordered to policy order)
-            arm_pos,                # 7 (arm order is same)
-            arm_vel,                # 7 (arm order is same)
-            self._last_action_policy # 19 (in Policy order for observations)
+            leg_pos_policy,         # 12 (joint_pos_rel, policy order)
+            leg_vel_policy,         # 12 (policy order)
+            arm_pos_rel,            # 7 (joint_pos_rel; arm order same)
+            arm_vel,                # 7 (arm order same)
+            self._last_action_policy # 19 (raw policy output, policy order)
         ])  # Total: 69
 
         # Return in format compatible with both logging and ONNX

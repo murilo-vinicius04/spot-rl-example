@@ -110,7 +110,7 @@ def get_joint_velocity(state: robot_state_pb2.RobotStateStreamResponse):
     # I trained with the correct order
     # spot_to_orbit = find_ordering(ORDERED_JOINT_NAMES_SPOT, ORDERED_JOINT_NAMES_ISAAC)
     # vel = reorder(state.joint_states.velocity, spot_to_orbit)
-    return state.joint_states.position
+    return state.joint_states.velocity
 
 
 def generate_joint_commands(state: robot_state_pb2.RobotStateStreamResponse):
